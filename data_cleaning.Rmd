@@ -1,0 +1,186 @@
+---
+title: "Data Cleaning and Preparation for MPS1 Inhibitor Modeling"
+author: "Hoa"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+
+## Introduction 
+The objective of this project is to develop a machine learning-based classification model to identify potential inhibitors of the TTK (MPS1) kinase using publicly available bioactivity data from the ChEMBL database.
+
+## 1. Load Libraries
+```{r}
+library(dplyr)
+library(ggplot2)
+
+```
+
+## 2. Data Loading
+```{r}
+#Load and inspect dataset
+data <- read.csv("CHEMBL_bioactivity_mps1.csv")
+
+# Quick inspection
+#head(data)
+dim(data)
+```
+
+## 3. Data Cleaning 
+
+
+### 3.1. Filter IC50 values
+```{r}
+# Keep only IC50 in nM and exact relation
+data_ic50 <- data %>%
+  filter(Standard.Type == "IC50",
+         Standard.Units == "nM",
+         Standard.Relation == "'='") %>%
+  filter(!is.na(Standard.Value)) %>%
+  distinct(Smiles, .keep_all = TRUE)
+```
+Only IC50 values reported in nM with exact relation were retained. Duplicate compounds were removed based on their SMILES representation to avoid data leakage.
+
+
+```{r}
+# Convert numeric variables and remove NA rows 
+data_ic50 <- data_ic50 %>%
+  mutate(
+    Standard.Value = as.numeric(Standard.Value),
+    Molecular.Weight = as.numeric(Molecular.Weight),
+    AlogP = as.numeric(AlogP)
+  ) %>%
+  filter(
+    !is.na(Standard.Value),
+    !is.na(Molecular.Weight),
+    !is.na(AlogP)
+  )
+```
+
+```{r}
+dim(data_ic50)
+cat("Number of compounds after filtering:", nrow(data_ic50))
+```
+
+
+### 3.2. Check Distributions
+```{r}
+#Molecular Weight
+p_mw <- ggplot(data_ic50, aes(x = Molecular.Weight)) +
+  geom_histogram(bins = 30,
+                 fill = "#4C78A8",
+                 color = "black",
+                 alpha = 0.85) +
+  labs(title = "Molecular Weight Distribution",
+       x = "Molecular Weight (Da)",
+       y = "Count") +
+  theme_classic(base_size = 13) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+p_mw
+
+#AlogP
+p_logp <- ggplot(data_ic50, aes(x = AlogP)) +
+  geom_histogram(bins = 30,
+                 fill = "#E45756",
+                 color = "black",
+                 alpha = 0.85) +
+  labs(title = "AlogP Distribution",
+       x = "AlogP",
+       y = "Count") +
+  theme_classic(base_size = 13) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+p_logp
+
+
+#Save plots
+ggsave("mw_distribution.png", p_mw,
+       width = 5.5, height = 3.5, dpi = 300, bg = "white")
+
+ggsave("alogp_distribution.png", p_logp,
+       width = 5.5, height = 3.5, dpi = 300, bg = "white")
+
+```
+The distributions appear pretty normal, with no extreme outliers observed; therefore, no trimming was necessary.
+
+### 3.3. Create Activity Label
+```{r}
+# Compounds with IC50 ≤ 1000 nM classified as active, while compounds with IC50 > 1000 nM classified as inactive.
+data_ic50$Activity <- ifelse(data_ic50$Standard.Value <= 1000, 1, 0 )
+dim(data_ic50)
+```
+The binary label will serve as the target variable for modeling.
+
+### 3.4. Select relevant columns for modeling
+```{r}
+# Molecule.ChEMBL.ID, Smiles, Activity, Molecular.Weight, AlogP, and #RO5.Violations
+data_model <- data_ic50 %>%
+  select(
+    Molecule.ChEMBL.ID,
+    Smiles,
+    Molecular.Weight,
+    AlogP,
+    X.RO5.Violations,
+    Activity
+  )
+
+# Dataset summary after cleaning
+#head(data_model)
+dim(data_model)
+#table(data_model$Activity)
+summary(data_model)
+```
+
+
+```{r}
+cat("Number of compounds after cleaning:", nrow(data_model))
+prop.table(table(data_model$Activity))
+```
+
+### 3.5. Activity Class Distribution 
+```{r}
+# Count activity classes
+
+activity_counts <- data_model %>%
+  count(Activity) %>%
+  mutate(Activity = factor(Activity,
+                           levels = c(0,1),
+                           labels = c("Inactive", "Active")))
+
+p <- ggplot(activity_counts, aes(x = Activity, y = n, fill = Activity)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  labs(title = "Activity Distribution",
+       x = "Class",
+       y = "Number of Compounds") +
+  scale_fill_manual(values = c("#4C78A8", "#E45756")) +
+  theme_classic(base_size = 14) +   # removes grid
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text = element_text(color = "black"),
+    axis.title = element_text(color = "black")
+  )
+
+p
+
+#Save graph
+ggsave("activity_distribution.png",
+       plot = p,
+       width = 6,
+       height = 4,
+       dpi = 300,
+       bg = "white") 
+```
+The class distribution is highly imbalanced, which will be addressed during model training.
+
+### 3.6. Save Clean Dataset
+```{r}
+# Save dataset
+write.csv(data_model, "bioactivity_mps1_clean.csv", row.names = FALSE)
+
+```
